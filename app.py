@@ -668,3 +668,299 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # app.py
+
+import os
+import streamlit as st
+from streamlit_extras.add_vertical_space import add_vertical_space
+import chromadb
+import logging
+from ctransformers import AutoModelForCausalLM
+
+# --- Assume these functions are in pdf_preprocessing.py ---
+# To make this script runnable standalone for UI testing, we will create dummy functions.
+# In a real scenario, you would use: from pdf_preprocessing import extract_text_robust, chunk_text, store_in_chroma
+try:
+    from pdf_preprocessing import extract_text_robust, chunk_text, store_in_chroma
+    PDF_PREPROCESSING_AVAILABLE = True
+except ImportError:
+    PDF_PREPROCESSING_AVAILABLE = False
+    logging.warning("pdf_preprocessing.py not found. Upload functionality will be disabled.")
+    # Define dummy functions if the module is not found
+    def extract_text_robust(pdf_file): return "This is dummy text from a PDF." * 100
+    def chunk_text(text, chunk_size=800, overlap=150): return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size - overlap)]
+    def store_in_chroma(chunks, filename): pass
+# --- End of assumed functions ---
+
+
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Medical PDF Analyzer",
+    page_icon="🩺",
+    layout="wide"
+)
+
+# --- Custom CSS for Medical Theme ---
+st.markdown("""
+<style>
+    /* Main app background */
+    .stApp {
+        background-color: #F0F2F6;
+    }
+    /* Expander styling */
+    .st-expander {
+        border: 1px solid #0068C9;
+        border-radius: 10px;
+        background-color: #FFFFFF;
+    }
+    .st-expander header {
+        font-weight: bold;
+        color: #0068C9;
+    }
+    /* Main headers */
+    h1, h2 {
+        color: #1E3D59;
+    }
+    /* Buttons */
+    .stButton>button {
+        background-color: #0068C9;
+        color: white;
+        border-radius: 5px;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #00509E;
+        color: white;
+    }
+    /* Response box */
+    .response-box {
+        border: 1px solid #B0C4DE;
+        border-radius: 8px;
+        padding: 15px;
+        background-color: #FFFFFF;
+        margin-bottom: 20px;
+    }
+    .response-box p {
+        font-family: 'sans serif';
+        font-size: 16px;
+        color: #333333;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# --- Caching for expensive operations ---
+@st.cache_resource
+def get_llm_model():
+    """Load the LLM from the local file system."""
+    model_path = os.path.join("models", "llama-2-7b-chat.Q4_K_M.gguf")
+    if not os.path.exists(model_path):
+        st.error(f"Model file not found at {model_path}. Please follow the setup instructions.")
+        return None
+    try:
+        llm = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            model_type='llama',
+            max_new_tokens=1024,
+            context_length=3000,
+            temperature=0.1,
+            repetition_penalty=1.1
+        )
+        return llm
+    except Exception as e:
+        st.error(f"Failed to load the LLM. Error: {e}")
+        return None
+
+@st.cache_resource
+def get_chroma_client():
+    """Initialize a persistent ChromaDB client."""
+    try:
+        return chromadb.PersistentClient(path="./chroma_db")
+    except Exception as e:
+        st.error(f"Failed to initialize ChromaDB. Error: {e}")
+        return None
+
+# --- LLM and DB Initialization ---
+llm = get_llm_model()
+chroma_client = get_chroma_client()
+
+
+# --- Session State Initialization ---
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
+
+
+# --- Core Logic Functions ---
+def query_chroma(query_text: str, collection_name: str, n_results=4):
+    """Queries the specified ChromaDB collection."""
+    if not chroma_client:
+        return None, "ChromaDB client is not available."
+    try:
+        collection = chroma_client.get_collection(name=collection_name)
+        results = collection.query(
+            query_texts=[query_text],
+            n_results=n_results
+        )
+        return results, None
+    except Exception as e:
+        return None, f"Could not query collection '{collection_name}'. It might not exist yet. Error: {e}"
+
+def generate_response(llm_instance, question: str, context_chunks: list):
+    """Generates a response using the LLM with context."""
+    if not llm_instance:
+        return "LLM is not loaded. Cannot generate response."
+
+    context_str = "\n\n".join([f"Source [{i+1}]:\n{chunk}" for i, chunk in enumerate(context_chunks)])
+
+    prompt = f"""
+    You are an expert medical assistant. Based SOLELY on the context provided below, answer the user's question.
+    Your answer must be concise and directly derived from the text.
+    When you use information from a source, you MUST cite it by including `[Source X]` at the end of the sentence, where X is the source number.
+    If the context does not contain the answer, state that you cannot answer based on the provided documents.
+
+    --- CONTEXT ---
+    {context_str}
+
+    --- QUESTION ---
+    {question}
+
+    --- ANSWER ---
+    """
+    try:
+        response = llm_instance(prompt)
+        return response
+    except Exception as e:
+        logging.error(f"Error during LLM inference: {e}")
+        return f"An error occurred while generating the response: {e}"
+
+
+# --- UI Layout ---
+st.title("🩺 Medical PDF Analysis Dashboard")
+add_vertical_space(1)
+
+tab_upload, tab_ask, tab_history = st.tabs(["Upload Documents", "❓ Ask a Question", "📜 History"])
+
+# --- Upload Tab ---
+with tab_upload:
+    st.header("Upload Medical PDFs")
+    if not PDF_PREPROCESSING_AVAILABLE:
+        st.error("The `pdf_preprocessing.py` script was not found. Please place it in the same directory to enable uploads.")
+    else:
+        uploaded_pdfs = st.file_uploader(
+            "Choose PDF files to analyze",
+            type="pdf",
+            accept_multiple_files=True
+        )
+
+        if st.button("Process Uploaded Files") and uploaded_pdfs:
+            with st.spinner("Processing PDFs... This may take a moment."):
+                for pdf in uploaded_pdfs:
+                    file_name = pdf.name
+                    if file_name in st.session_state.uploaded_files:
+                        st.warning(f"'{file_name}' has already been processed. Skipping.")
+                        continue
+                    
+                    try:
+                        # Save the file temporarily to be read by PyPDF2/pdfplumber
+                        with open(file_name, "wb") as f:
+                            f.write(pdf.getbuffer())
+                        
+                        st.info(f"Extracting text from '{file_name}'...")
+                        text = extract_text_robust(file_name)
+
+                        if text:
+                            st.info(f"Chunking text for '{file_name}'...")
+                            chunks = chunk_text(text)
+                            
+                            st.info(f"Storing chunks in database for '{file_name}'...")
+                            store_in_chroma(chunks, file_name)
+                            
+                            st.session_state.uploaded_files.append(file_name)
+                            st.success(f"✅ Successfully processed and indexed '{file_name}'!")
+                        else:
+                            st.error(f"Failed to extract any text from '{file_name}'.")
+
+                        os.remove(file_name) # Clean up the temp file
+                    
+                    except Exception as e:
+                        st.error(f"An error occurred while processing '{file_name}': {e}")
+                        if os.path.exists(file_name):
+                            os.remove(file_name)
+
+
+# --- Ask a Question Tab ---
+with tab_ask:
+    st.header("Query Your Documents")
+    if not chroma_client:
+        st.error("Cannot connect to document database (ChromaDB). Please check configuration.")
+    else:
+        try:
+            collections = chroma_client.list_collections()
+            collection_names = [c.name for c in collections]
+        except Exception:
+            collections = []
+            collection_names = []
+
+        if not collection_names:
+            st.warning("No document collections found. Please upload PDFs in the 'Upload' tab first.")
+        else:
+            selected_collection = st.selectbox(
+                "Choose a document collection to query:",
+                options=collection_names,
+                index=0
+            )
+            
+            question = st.text_input("Enter your question about the selected document:", key="question_input")
+
+            if st.button("Get Answer"):
+                if not question:
+                    st.warning("Please enter a question.")
+                elif not llm:
+                    st.error("LLM is not available. Cannot proceed.")
+                else:
+                    with st.spinner("Searching for relevant information and generating answer..."):
+                        # 1. Retrieve chunks from ChromaDB
+                        retrieved_chunks, error = query_chroma(question, selected_collection)
+                        
+                        if error:
+                            st.error(error)
+                        elif not retrieved_chunks or not retrieved_chunks['documents'][0]:
+                            st.warning("Could not find any relevant information in the document to answer this question.")
+                        else:
+                            # 2. Generate response with LLM
+                            context_docs = retrieved_chunks['documents'][0]
+                            answer = generate_response(llm, question, context_docs)
+                            
+                            # 3. Display the answer and sources
+                            st.subheader("Answer")
+                            st.markdown(f'<div class="response-box"><p>{answer}</p></div>', unsafe_allow_html=True)
+                            add_vertical_space(1)
+                            
+                            # 4. Display expandable source chunks
+                            st.subheader("Retrieved Sources")
+                            st.info("The answer was generated based on the following text chunks from the document:")
+                            
+                            for i, (doc, meta) in enumerate(zip(retrieved_chunks['documents'][0], retrieved_chunks['metadatas'][0])):
+                                with st.expander(f"Source Chunk {i+1} (From: {meta.get('source', 'N/A')})"):
+                                    st.write(doc)
+
+                            # 5. Update history
+                            st.session_state.history.append({
+                                "collection": selected_collection,
+                                "question": question,
+                                "answer": answer
+                            })
+
+# --- History Tab ---
+with tab_history:
+    st.header("Question & Answer History")
+    if not st.session_state.history:
+        st.info("No questions have been asked yet.")
+    else:
+        for i, entry in enumerate(reversed(st.session_state.history)):
+            st.markdown(f"**Collection:** `{entry['collection']}`")
+            st.markdown(f"**Q{len(st.session_state.history)-i}:** {entry['question']}")
+            st.markdown(f"**A:** {entry['answer']}")
+            st.divider()
