@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  vaid-ji:
+    build: .
+    container_name: vaid-ji-app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./.sentence_transformers_cache:/app/.sentence_transformers_cache
+      - ./rag_cache.pkl:/app/rag_cache.pkl
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - CHROMA_DB_PATH=/app/chroma_db
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
