@@ -1,13 +1,30 @@
-# rephrasing_loop.py
+"""
+Rephrasing Loop module for VAID JI Medical Research Assistant
+Handles query refinement and quality scoring for better responses
+"""
 
 import os
 import re
 import time
+import logging
 from typing import List
 
-from rag_pipeline import run_rag_pipeline  # Assumes rag_pipeline.py is in same folder
+from rag_pipeline import run_rag_pipeline
 
-# === CONFIG ===
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import configuration
+try:
+    from config import MAX_REPHRASE_ATTEMPTS, MIN_RESPONSE_LENGTH, MEDICAL_KEYWORDS
+except ImportError:
+    logger.warning("config.py not found, using default values")
+    MAX_REPHRASE_ATTEMPTS = 2
+    MIN_RESPONSE_LENGTH = 50
+    MEDICAL_KEYWORDS = ['study', 'treatment', 'diagnosis', 'clinical', 'dosage', 'symptom', 'trial']
+
+# === REPHRASE TRIGGERS ===
 REPHRASE_TRIGGERS = [
     r"\bwhat is this\??",
     r"\bcan you explain\??",
@@ -16,23 +33,34 @@ REPHRASE_TRIGGERS = [
     r"\bwhy\??"
 ]
 
-MEDICAL_KEYWORDS = ['study', 'treatment', 'diagnosis', 'clinical', 'dosage', 'symptom', 'trial']
-MIN_RESPONSE_LENGTH = 50
-MAX_REPHRASE_ATTEMPTS = 2
 
-
-# === QUALITY SCORING ===
 def is_response_low_quality(response: str) -> bool:
-    """Score response based on length and medical term presence."""
+    """
+    Score response based on length and medical term presence.
+    
+    Args:
+        response: The response text to evaluate
+        
+    Returns:
+        bool: True if response is low quality, False otherwise
+    """
     response = response.lower()
     length_ok = len(response.strip()) >= MIN_RESPONSE_LENGTH
     contains_medical_term = any(keyword in response for keyword in MEDICAL_KEYWORDS)
     return not (length_ok and contains_medical_term)
 
 
-# === REPHRASING STRATEGY ===
 def rephrase_query(query: str, attempt: int) -> str:
-    """Basic rephrasing logic."""
+    """
+    Rephrase query to improve response quality.
+    
+    Args:
+        query: The original query string
+        attempt: The current attempt number
+        
+    Returns:
+        str: The rephrased query
+    """
     query = query.strip().lower()
 
     for pattern in REPHRASE_TRIGGERS:
@@ -43,34 +71,40 @@ def rephrase_query(query: str, attempt: int) -> str:
     return f"{query} (Please elaborate using medical terminology.)"
 
 
-# === MAIN EXECUTION LOOP ===
 def smart_medical_query(query: str) -> str:
-    """Handles rephrasing loop + quality scoring."""
-
+    """
+    Handle query with rephrasing loop and quality scoring.
+    
+    Args:
+        query: The user's medical question
+        
+    Returns:
+        str: The final response after quality checks and possible rephrasing
+    """
     original_query = query
     response = ""
     attempt = 0
 
     while attempt <= MAX_REPHRASE_ATTEMPTS:
         try:
-            print(f"\n[Attempt {attempt + 1}] Querying RAG pipeline...")
+            logger.info(f"Attempt {attempt + 1}: Querying RAG pipeline...")
             response = run_rag_pipeline(query)
         except Exception as e:
-            print(f"[ERROR] Failed to run RAG pipeline: {str(e)}")
+            logger.error(f"Failed to run RAG pipeline: {str(e)}")
             return "[System Error] Unable to process the request."
 
-        print(f"[Response]: {response}")
+        logger.info(f"Response received: {response[:100]}...")
 
         if not is_response_low_quality(response):
             return response
 
-        print("[Warning] Low quality response detected.")
+        logger.warning("Low quality response detected.")
         attempt += 1
         if attempt > MAX_REPHRASE_ATTEMPTS:
             break
 
         query = rephrase_query(original_query, attempt)
-        print(f"[Rephrased Query]: {query}")
+        logger.info(f"Rephrased Query: {query}")
 
     return "[Final Response] Unable to generate a high-quality medical answer. Please provide more context."
 

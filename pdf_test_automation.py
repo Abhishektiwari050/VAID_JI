@@ -1,26 +1,37 @@
-# pdf_test_automation.py
+"""
+PDF Test Automation module for VAID JI Medical Research Assistant
+Integrates with Google Sheets for automated PDF testing
+"""
 
 import os
+import logging
+from typing import List, Optional
+
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
-import logging
-from typing import List
 
 # Import the robust text extraction function from our other script
 try:
     from pdf_preprocessing import extract_text_robust
 except ImportError:
-    print("FATAL ERROR: pdf_preprocessing.py not found. Make sure it's in the same directory.")
+    logging.critical("FATAL ERROR: pdf_preprocessing.py not found. Make sure it's in the same directory.")
     exit()
 
-# --- Configuration ---
-# !!! IMPORTANT !!!
-# 1. UPDATE this with the exact name of your Google Sheet.
-SHEET_NAME = "PDF_Test_Results" 
-# 2. ENSURE 'credentials.json' is in the same directory as this script.
-CREDS_FILE = 'credentials.json'
-# 3. SET the column names as they appear in your sheet's header row.
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Import configuration
+try:
+    from config import GSHEET_CREDENTIALS, GSHEET_NAME, MIN_TEXT_LENGTH
+except ImportError:
+    logger.warning("config.py not found, using default values")
+    GSHEET_CREDENTIALS = 'credentials.json'
+    GSHEET_NAME = "PDF_Test_Results"
+    MIN_TEXT_LENGTH = 100
+
+# Column names as they appear in your sheet's header row
 PATH_COLUMN = 'pdf_path'
 STATUS_COLUMN = 'test_status'
 COUNT_COLUMN = 'character_count'
@@ -32,28 +43,25 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def authenticate_gsheet_client():
+def authenticate_gsheet_client() -> Optional[gspread.Client]:
     """
     Authenticates with the Google Sheets API using service account credentials.
 
     Returns:
-        gspread.Client: An authorized gspread client object.
-        Returns None on failure.
+        gspread.Client: An authorized gspread client object, or None on failure.
     """
     try:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPES)
+        creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS, SCOPES)
         client = gspread.authorize(creds)
-        logging.info("Successfully authenticated with Google Sheets API.")
+        logger.info("Successfully authenticated with Google Sheets API.")
         return client
     except FileNotFoundError:
-        logging.error(f"FATAL: Credentials file not found at '{CREDS_FILE}'.")
-        logging.error("Please follow the setup instructions to create and place the credentials file.")
+        logger.error(f"FATAL: Credentials file not found at '{GSHEET_CREDENTIALS}'.")
+        logger.error("Please follow the setup instructions to create and place the credentials file.")
         return None
     except Exception as e:
-        logging.error(f"An unexpected error occurred during Google API authentication: {e}")
+        logger.error(f"An unexpected error occurred during Google API authentication: {e}")
         return None
 
 def run_pdf_tests(worksheet):
@@ -94,11 +102,11 @@ def run_pdf_tests(worksheet):
                 
                 if extracted_text:
                     char_count = len(extracted_text)
-                    if char_count > 100:
+                    if char_count > MIN_TEXT_LENGTH:
                         status = 'PASS'
                         error_msg = ''
                     else:
-                        error_msg = "Extracted text is too short (<= 100 chars)."
+                        error_msg = f"Extracted text is too short (<= {MIN_TEXT_LENGTH} chars)."
                 else:
                     error_msg = "Text extraction failed; function returned None."
 
@@ -140,33 +148,33 @@ def run_pdf_tests(worksheet):
 
 def main():
     """Main function to orchestrate the PDF test automation."""
-    logging.info("--- Starting PDF Test Automation Script ---")
+    logger.info("--- Starting PDF Test Automation Script ---")
     
     client = authenticate_gsheet_client()
     if not client:
-        return # Stop execution if authentication fails
+        return  # Stop execution if authentication fails
 
     try:
-        spreadsheet = client.open(SHEET_NAME)
-        worksheet = spreadsheet.sheet1 # Get the first sheet
-        logging.info(f"Successfully opened worksheet '{worksheet.title}' in spreadsheet '{SHEET_NAME}'.")
+        spreadsheet = client.open(GSHEET_NAME)
+        worksheet = spreadsheet.sheet1  # Get the first sheet
+        logger.info(f"Successfully opened worksheet '{worksheet.title}' in spreadsheet '{GSHEET_NAME}'.")
     except gspread.exceptions.SpreadsheetNotFound:
-        logging.error(f"FATAL: Spreadsheet named '{SHEET_NAME}' not found.")
-        logging.error("Please check the sheet name and ensure it has been shared with the service account email.")
+        logger.error(f"FATAL: Spreadsheet named '{GSHEET_NAME}' not found.")
+        logger.error("Please check the sheet name and ensure it has been shared with the service account email.")
         return
     except Exception as e:
-        logging.error(f"An error occurred while opening the sheet: {e}")
+        logger.error(f"An error occurred while opening the sheet: {e}")
         return
 
     run_pdf_tests(worksheet)
-    logging.info("--- Script Finished ---")
+    logger.info("--- Script Finished ---")
 
 
 if __name__ == '__main__':
-    # Create a dummy PDF and sheet instructions for first-time use
+    # Create a dummy PDF for testing if it doesn't exist
     if not os.path.exists("sample_medical_report.pdf"):
-        logging.warning("Creating a dummy PDF 'sample_medical_report.pdf' for testing purposes.")
-        logging.warning("Please add its path './sample_medical_report.pdf' to your Google Sheet.")
+        logger.warning("Creating a dummy PDF 'sample_medical_report.pdf' for testing purposes.")
+        logger.warning("Please add its path './sample_medical_report.pdf' to your Google Sheet.")
         try:
             from reportlab.pdfgen import canvas
             from reportlab.lib.pagesizes import letter
@@ -180,8 +188,8 @@ if __name__ == '__main__':
             c.drawText(text)
             c.save()
         except ImportError:
-            logging.error("Please install reportlab (`pip install reportlab`) to create a sample PDF.")
+            logger.error("Please install reportlab (`pip install reportlab`) to create a sample PDF.")
         except Exception as e:
-            logging.error(f"Could not create dummy PDF: {e}")
+            logger.error(f"Could not create dummy PDF: {e}")
             
     main()
