@@ -8,7 +8,7 @@ import time
 import hashlib
 import pickle
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
@@ -87,8 +87,8 @@ class MistralLLM(LLM):
     def _llm_type(self) -> str:
         return "mistral"
     
-    def _call(self, prompt: str, stop: Optional[list] = None, **kwargs) -> str:
-        """Call the Mistral LLM"""
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs) -> str:
+        """Call the Mistral LLM via OpenRouter API"""
         try:
             llm = OpenRouterLLM(
                 model="mistralai/mistral-7b-instruct",
@@ -96,6 +96,7 @@ class MistralLLM(LLM):
                 openai_api_key=OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1"
             )
+            # Note: stop parameter not directly supported by OpenRouterLLM wrapper
             return llm.predict(prompt)
         except Exception as e:
             logger.error(f"Mistral API error: {e}")
@@ -109,14 +110,15 @@ class LLaMAFallbackLLM(LLM):
     def _llm_type(self) -> str:
         return "llama3"
     
-    def _call(self, prompt: str, stop: Optional[list] = None, **kwargs) -> str:
-        """Call the LLaMA3 LLM"""
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs) -> str:
+        """Call the LLaMA3 LLM via Groq API"""
         try:
             llm = Groq(
                 temperature=TEMPERATURE,
                 model="llama3-8b-8192",
                 groq_api_key=GROQ_API_KEY
             )
+            # Note: stop parameter not directly supported by Groq wrapper
             return llm.predict(prompt)
         except Exception as e:
             logger.error(f"Groq fallback failed: {e}")

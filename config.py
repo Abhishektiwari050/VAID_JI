@@ -4,7 +4,7 @@ Centralizes all configuration settings and environment variables
 """
 
 import os
-from typing import Optional
+from typing import Optional, List, Tuple
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -78,7 +78,7 @@ MEDICAL_KEYWORDS = [
     'symptom', 'trial', 'patient', 'therapy', 'medication'
 ]
 
-def validate_config() -> tuple[bool, list[str]]:
+def validate_config() -> Tuple[bool, List[str]]:
     """
     Validate configuration and return status with any error messages
     
