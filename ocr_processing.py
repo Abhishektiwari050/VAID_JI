@@ -1,22 +1,32 @@
-# ocr_processing.py
+"""
+OCR Processing module for VAID JI Medical Research Assistant
+Handles text extraction from scanned PDFs using OCR
+"""
 
 import os
 import pytesseract
 import pdfplumber
 import logging
+from typing import Optional
 from PIL import Image
-
-# --- Configuration ---
-# If Tesseract is not in your system's PATH, uncomment and set the following line:
-# For Windows:
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-# For Linux/macOS, it's usually in the PATH and this is not needed.
-
-DB_PATH = "./chroma_db"  # Changed to relative path for portability
-# To use the original path, set: DB_PATH = r"D:\Projects\VAID_JI\chroma_db"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Configuration
+try:
+    from config import CHROMA_DB_PATH, TESSERACT_CMD, OCR_RESOLUTION, OCR_LANGUAGE
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    DB_PATH = CHROMA_DB_PATH
+except ImportError:
+    DB_PATH = "./chroma_db"
+    OCR_RESOLUTION = 300
+    OCR_LANGUAGE = "eng"
+    # If Tesseract is not in your system's PATH, uncomment and set the following line:
+    # For Windows:
+    # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- Import reusable functions from pdf_preprocessing.py ---
 try:
@@ -31,10 +41,11 @@ except ImportError:
     def store_in_chroma(chunks, filename): pass
 
 
-def extract_text_with_ocr(pdf_path: str) -> str | None:
+def extract_text_with_ocr(pdf_path: str) -> Optional[str]:
     """
     Extracts text from a PDF using a hybrid approach.
-    It processes each page, attempts to extract text directly, and if a page
+    
+    Processes each page, attempts to extract text directly, and if a page
     yields minimal text (indicating a scanned image), it performs OCR on that page.
 
     Args:
@@ -44,16 +55,17 @@ def extract_text_with_ocr(pdf_path: str) -> str | None:
         A string containing all extracted text, or None if the file cannot be processed.
     """
     if not os.path.exists(pdf_path):
-        logging.error(f"File not found: {pdf_path}")
+        logger.error(f"File not found: {pdf_path}")
         return None
 
     full_text = []
-    logging.info(f"Starting hybrid text/OCR extraction for '{os.path.basename(pdf_path)}'.")
+    logger.info(f"Starting hybrid text/OCR extraction for '{os.path.basename(pdf_path)}'.")
 
     try:
         with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
             for i, page in enumerate(pdf.pages):
-                logging.info(f"Processing page {i + 1}/{len(pdf.pages)}...")
+                logger.info(f"Processing page {i + 1}/{total_pages}...")
 
                 # 1. Attempt direct text extraction
                 text = page.extract_text()
@@ -61,35 +73,34 @@ def extract_text_with_ocr(pdf_path: str) -> str | None:
                 # 2. Decide whether to use OCR
                 # Heuristic: If text is very short or None, treat as a scanned/image-based page.
                 if text and len(text.strip()) > 50:
-                    logging.info(f"Page {i + 1}: Extracted text directly.")
+                    logger.info(f"Page {i + 1}: Extracted text directly.")
                     full_text.append(text)
                 else:
-                    logging.warning(f"Page {i + 1}: Minimal text found. Applying OCR...")
+                    logger.warning(f"Page {i + 1}: Minimal text found. Applying OCR...")
                     try:
                         # Convert page to a high-resolution image for better OCR accuracy
-                        # 300 DPI is a good standard for OCR.
-                        page_image = page.to_image(resolution=300).original
+                        page_image = page.to_image(resolution=OCR_RESOLUTION).original
 
                         # Use pytesseract to perform OCR on the image
-                        ocr_text = pytesseract.image_to_string(page_image, lang='eng')
+                        ocr_text = pytesseract.image_to_string(page_image, lang=OCR_LANGUAGE)
                         
                         if ocr_text:
-                            logging.info(f"Page {i + 1}: Successfully extracted text via OCR.")
+                            logger.info(f"Page {i + 1}: Successfully extracted text via OCR.")
                             full_text.append(ocr_text)
                         else:
-                            logging.warning(f"Page {i + 1}: OCR did not detect any text.")
+                            logger.warning(f"Page {i + 1}: OCR did not detect any text.")
 
                     except pytesseract.TesseractNotFoundError:
-                        logging.error("Tesseract is not installed or not in your PATH.")
-                        logging.error("Please install Tesseract and configure the path if necessary.")
-                        return None # Abort if Tesseract is not found
+                        logger.error("Tesseract is not installed or not in your PATH.")
+                        logger.error("Please install Tesseract and configure the path if necessary.")
+                        return None  # Abort if Tesseract is not found
                     except Exception as e:
-                        logging.error(f"Failed to perform OCR on page {i + 1}: {e}")
+                        logger.error(f"Failed to perform OCR on page {i + 1}: {e}")
                         
-        return "\n".join(full_text).strip()
+        return "\n".join(full_text).strip() if full_text else None
 
     except Exception as e:
-        logging.error(f"An error occurred while processing the PDF file '{pdf_path}': {e}")
+        logger.error(f"An error occurred while processing the PDF file '{pdf_path}': {e}")
         return None
 
 

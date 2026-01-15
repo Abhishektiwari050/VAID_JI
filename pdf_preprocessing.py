@@ -1,20 +1,39 @@
+"""
+PDF Preprocessing module for VAID JI Medical Research Assistant
+Handles PDF text extraction, chunking, and storage in ChromaDB
+"""
+
 import os
 import sys
+import logging
+from typing import Optional, List
+
 import PyPDF2
 import pdfplumber
 import chromadb
 from sentence_transformers import SentenceTransformer
-import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def extract_text_robust(pdf_file: str) -> str | None:
+# Import configuration
+try:
+    from config import CHUNK_SIZE, CHUNK_OVERLAP, MIN_TEXT_LENGTH, CHROMA_DB_PATH, EMBEDDING_MODEL_NAME
+except ImportError:
+    logger.warning("config.py not found, using default values")
+    CHUNK_SIZE = 800
+    CHUNK_OVERLAP = 150
+    MIN_TEXT_LENGTH = 100
+    CHROMA_DB_PATH = "./chroma_db"
+    EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+
+def extract_text_robust(pdf_file: str) -> Optional[str]:
     """
-    Extracts text from a PDF file robustly.
+    Extracts text from a PDF file robustly using multiple methods.
 
     It first attempts to use pdfplumber for extraction. If the extracted text
-    is less than 100 characters or if pdfplumber fails, it falls back to PyPDF2.
+    is less than MIN_TEXT_LENGTH characters or if pdfplumber fails, it falls back to PyPDF2.
     If both methods fail, it returns None.
 
     Args:
@@ -31,14 +50,14 @@ def extract_text_robust(pdf_file: str) -> str | None:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-        logging.info(f"Successfully extracted text with pdfplumber from {pdf_file}")
+        logger.info(f"Successfully extracted text with pdfplumber from {pdf_file}")
 
-        if len(text) < 100:
-            logging.warning(f"Extracted text with pdfplumber is short (< 100 chars) for {pdf_file}. Falling back to PyPDF2.")
+        if len(text) < MIN_TEXT_LENGTH:
+            logger.warning(f"Extracted text with pdfplumber is short (< {MIN_TEXT_LENGTH} chars) for {pdf_file}. Falling back to PyPDF2.")
             raise ValueError("Text too short")
 
     except Exception as e:
-        logging.error(f"pdfplumber failed for {pdf_file}: {e}. Falling back to PyPDF2.")
+        logger.error(f"pdfplumber failed for {pdf_file}: {e}. Falling back to PyPDF2.")
         text = ""  # Reset text before trying PyPDF2
         try:
             with open(pdf_file, 'rb') as f:
@@ -48,30 +67,36 @@ def extract_text_robust(pdf_file: str) -> str | None:
                     if page_text:
                         text += page_text + "\n"
             if text:
-                logging.info(f"Successfully extracted text with PyPDF2 from {pdf_file}")
+                logger.info(f"Successfully extracted text with PyPDF2 from {pdf_file}")
             else:
-                logging.warning(f"PyPDF2 extracted no text from {pdf_file}.")
+                logger.warning(f"PyPDF2 extracted no text from {pdf_file}.")
                 return None
 
         except Exception as e_pypdf:
-            logging.error(f"Both pdfplumber and PyPDF2 failed to extract text from {pdf_file}.")
-            logging.error(f"PyPDF2 error: {e_pypdf}")
+            logger.error(f"Both pdfplumber and PyPDF2 failed to extract text from {pdf_file}.")
+            logger.error(f"PyPDF2 error: {e_pypdf}")
             return None
 
-    return text.strip()
+    return text.strip() if text else None
 
-def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str]:
+def chunk_text(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
     """
     Splits a long text into smaller chunks with a specified overlap.
 
     Args:
         text: The text to be chunked.
-        chunk_size: The desired character length of each chunk.
-        overlap: The number of characters to overlap between consecutive chunks.
+        chunk_size: The desired character length of each chunk. Uses config default if None.
+        overlap: The number of characters to overlap between consecutive chunks. Uses config default if None.
 
     Returns:
         A list of text chunks.
     """
+    # Use defaults from config if not specified
+    if chunk_size is None:
+        chunk_size = CHUNK_SIZE
+    if overlap is None:
+        overlap = CHUNK_OVERLAP
+        
     if not text:
         return []
         
@@ -85,11 +110,11 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[str
              # Add the last remaining part of the text
             if len(text) > end:
                 chunks.append(text[end:])
-            break # Exit loop to avoid infinite loop on last chunk
+            break  # Exit loop to avoid infinite loop on last chunk
             
     return chunks
 
-def store_in_chroma(chunks: list[str], filename: str):
+def store_in_chroma(chunks: List[str], filename: str):
     """
     Stores text chunks and their embeddings in a local ChromaDB collection.
 
@@ -98,21 +123,25 @@ def store_in_chroma(chunks: list[str], filename: str):
         filename: The name of the source file, used for the collection name.
     """
     if not chunks:
-        logging.warning("No chunks to store. Aborting ChromaDB storage.")
+        logger.warning("No chunks to store. Aborting ChromaDB storage.")
         return
 
-    db_path = "./chroma_db"
     collection_name = os.path.splitext(os.path.basename(filename))[0].replace(" ", "_")
+    
+    # Sanitize collection name - ChromaDB has requirements
+    collection_name = ''.join(c if c.isalnum() or c in ['_', '-'] else '_' for c in collection_name)
+    if not collection_name[0].isalnum():
+        collection_name = 'doc_' + collection_name
 
     try:
         # Initialize ChromaDB client
-        client = chromadb.PersistentClient(path=db_path)
+        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
         # Initialize the embedding model
         try:
-            model = SentenceTransformer('all-MiniLM-L6-v2')
+            model = SentenceTransformer(EMBEDDING_MODEL_NAME)
         except Exception as e:
-            logging.error(f"Failed to load SentenceTransformer model: {e}")
+            logger.error(f"Failed to load SentenceTransformer model: {e}")
             return
             
         # Create or get the collection
@@ -132,12 +161,12 @@ def store_in_chroma(chunks: list[str], filename: str):
                 metadatas=metadatas,
                 ids=ids
             )
-            logging.info(f"Successfully stored {len(chunks)} chunks in ChromaDB collection '{collection_name}' at {db_path}")
+            logger.info(f"Successfully stored {len(chunks)} chunks in ChromaDB collection '{collection_name}' at {CHROMA_DB_PATH}")
         except Exception as e:
-            logging.error(f"Failed to generate embeddings or store in ChromaDB: {e}")
+            logger.error(f"Failed to generate embeddings or store in ChromaDB: {e}")
 
     except Exception as e:
-        logging.error(f"Failed to initialize or interact with ChromaDB: {e}")
+        logger.error(f"Failed to initialize or interact with ChromaDB: {e}")
 
 
 if __name__ == '__main__':

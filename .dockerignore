@@ -1,0 +1,60 @@
+# .dockerignore - Files to exclude from Docker build context
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+medical_assistant_env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Environment files (will be passed via docker-compose)
+.env
+.env.local
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage
+
+# Documentation
+docs/_build/
+
+# Temporary files
+*.log
+*.tmp
+temp_*
+
+# Database and cache (mounted as volumes)
+chroma_db/
+rag_cache.pkl
+.sentence_transformers_cache/
+
+# PDFs (except samples if needed)
+*.pdf
+
+# Credentials
+credentials.json
+*.pem
+*.key
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

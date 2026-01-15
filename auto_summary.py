@@ -1,31 +1,52 @@
-# auto_summary.py
+"""
+Auto-summarization module for VAID JI Medical Research Assistant
+Generates concise summaries of medical research documents
+"""
 
 import os
 import traceback
-from typing import List
+import logging
+from typing import List, Optional
 
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from langchain.llms.base import LLM
 from langchain_community.llms.openai import OpenAI as OpenRouterLLM
 from langchain_community.llms.groq import Groq
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import Chroma
 
-from langchain.embeddings import SentenceTransformerEmbeddings
-from langchain.vectorstores import Chroma
+try:
+    from rag_pipeline import get_cache_key
+except ImportError:
+    # Fallback if rag_pipeline is not available
+    import hashlib
+    def get_cache_key(query: str) -> str:
+        return hashlib.sha256(query.encode()).hexdigest()
 
-from rag_pipeline import get_cache_key  # Reuse caching function from rag_pipeline.py
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # === CONFIG ===
-CHROMA_DB_PATH = "./chroma_db"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-TEMPERATURE = 0.1
-CHUNK_SIZE_LIMIT = 800  # chars
-SUMMARY_WORD_LIMIT = 200
-
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-PROMPT_TEMPLATE = """Summarize key findings in plain language based ONLY on provided context.
+try:
+    from config import (
+        CHROMA_DB_PATH, EMBEDDING_MODEL_NAME, TEMPERATURE,
+        CHUNK_SIZE, SUMMARY_WORD_LIMIT, OPENROUTER_API_KEY, 
+        GROQ_API_KEY, SUMMARY_PROMPT_TEMPLATE
+    )
+    CHUNK_SIZE_LIMIT = CHUNK_SIZE
+    PROMPT_TEMPLATE = SUMMARY_PROMPT_TEMPLATE
+except ImportError:
+    # Fallback to environment variables if config.py not available
+    CHROMA_DB_PATH = "./chroma_db"
+    EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+    TEMPERATURE = 0.1
+    CHUNK_SIZE_LIMIT = 800
+    SUMMARY_WORD_LIMIT = 200
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    PROMPT_TEMPLATE = """Summarize key findings in plain language based ONLY on provided context.
 Keep the summary brief and under 200 words.
 
 Context:
@@ -37,7 +58,14 @@ Summary:
 # === LLM WRAPPERS ===
 
 class MistralLLM(LLM):
-    def _call(self, prompt: str, **kwargs) -> str:
+    """Custom LLM wrapper for Mistral via OpenRouter"""
+    
+    @property
+    def _llm_type(self) -> str:
+        return "mistral"
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs) -> str:
+        """Call the Mistral LLM via OpenRouter API"""
         try:
             llm = OpenRouterLLM(
                 model="mistralai/mistral-7b-instruct",
@@ -45,21 +73,32 @@ class MistralLLM(LLM):
                 openai_api_key=OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1"
             )
+            # Note: stop parameter not directly supported by OpenRouterLLM wrapper
             return llm.predict(prompt)
         except Exception as e:
+            logger.error(f"Mistral API error: {e}")
             raise RuntimeError(f"Mistral API error: {str(e)}")
 
 
 class LLaMAFallbackLLM(LLM):
-    def _call(self, prompt: str, **kwargs) -> str:
+    """Custom LLM wrapper for LLaMA3 via Groq (fallback)"""
+    
+    @property
+    def _llm_type(self) -> str:
+        return "llama3"
+    
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs) -> str:
+        """Call the LLaMA3 LLM via Groq API"""
         try:
             llm = Groq(
                 temperature=TEMPERATURE,
                 model="llama3-8b-8192",
                 groq_api_key=GROQ_API_KEY
             )
+            # Note: stop parameter not directly supported by Groq wrapper
             return llm.predict(prompt)
         except Exception as e:
+            logger.error(f"Groq fallback failed: {e}")
             raise RuntimeError(f"Groq fallback failed: {str(e)}")
 
 

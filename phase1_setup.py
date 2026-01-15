@@ -1,8 +1,18 @@
+"""
+Phase 1 Setup Script for VAID JI Medical Research Assistant
+Automates virtual environment creation and dependency installation
+"""
+
 import subprocess
 import sys
 import os
 import platform
 import venv
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Define your environment name
 ENV_NAME = "medical_assistant_env"
@@ -19,52 +29,99 @@ REQUIRED_PACKAGES = [
     "sentence-transformers==2.2.2",
     "chromadb==0.4.22",
     "gspread==5.12.0",
-    "oauth2client==4.1.3"
+    "oauth2client==4.1.3",
+    "pytesseract==0.3.10",
+    "reportlab==4.0.9",
+    "langchain==0.0.350"
 ]
 
-def run_command(command, env=None):
-    """Run a shell command and return success status."""
+def run_command(command: str, env: dict = None) -> bool:
+    """
+    Run a shell command and return success status.
+    
+    Args:
+        command: The shell command to execute
+        env: Optional environment variables
+        
+    Returns:
+        bool: True if command succeeded, False otherwise
+    """
     try:
         subprocess.check_call(command, shell=True, env=env)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error running command: {command}\n{e}")
+        logger.error(f"Error running command: {command}\n{e}")
         return False
 
-def create_virtual_env(env_name):
-    """Create a virtual environment in the current directory."""
+
+def create_virtual_env(env_name: str):
+    """
+    Create a virtual environment in the current directory.
+    
+    Args:
+        env_name: Name of the virtual environment to create
+    """
     if not os.path.exists(env_name):
-        print(f"🔧 Creating virtual environment: {env_name}")
+        logger.info(f"Creating virtual environment: {env_name}")
         venv.create(env_name, with_pip=True)
     else:
-        print(f"✅ Virtual environment '{env_name}' already exists.")
+        logger.info(f"Virtual environment '{env_name}' already exists.")
 
-def get_pip_path(env_name):
-    """Return pip path for the virtual environment based on OS."""
+
+def get_pip_path(env_name: str) -> str:
+    """
+    Return pip path for the virtual environment based on OS.
+    
+    Args:
+        env_name: Name of the virtual environment
+        
+    Returns:
+        str: Path to pip executable
+    """
     if platform.system() == "Windows":
         return os.path.join(env_name, "Scripts", "pip.exe")
     else:
         return os.path.join(env_name, "bin", "pip")
 
-def get_python_path(env_name):
-    """Return Python executable path in the virtual environment."""
+
+def get_python_path(env_name: str) -> str:
+    """
+    Return Python executable path in the virtual environment.
+    
+    Args:
+        env_name: Name of the virtual environment
+        
+    Returns:
+        str: Path to Python executable
+    """
     if platform.system() == "Windows":
         return os.path.join(env_name, "Scripts", "python.exe")
     else:
         return os.path.join(env_name, "bin", "python")
 
-def install_packages(pip_path):
-    """Install all required packages using pip."""
-    print("📦 Installing dependencies...")
+
+def install_packages(pip_path: str):
+    """
+    Install all required packages using pip.
+    
+    Args:
+        pip_path: Path to pip executable
+    """
+    logger.info("Installing dependencies...")
     for package in REQUIRED_PACKAGES:
-        print(f"➡ Installing {package}")
+        logger.info(f"Installing {package}")
         if not run_command(f'"{pip_path}" install {package}'):
-            print(f"❌ Failed to install {package}. Exiting.")
+            logger.error(f"Failed to install {package}. Exiting.")
             sys.exit(1)
 
-def verify_versions(python_path):
-    """Verify all installed package versions."""
-    print("\n🔍 Verifying installed versions:")
+def verify_versions(python_path: str):
+    """
+    Verify all installed package versions.
+    
+    Args:
+        python_path: Path to Python executable
+    """
+    logger.info("\n Verifying installed versions:")
     version_check_code = """
 import streamlit, PyPDF2, pdfplumber, pandas, numpy, streamlit_extras, dotenv, sentence_transformers, chromadb, gspread, oauth2client
 
@@ -82,8 +139,10 @@ print("✅ oauth2client:", oauth2client.__version__)
 """
     run_command(f'"{python_path}" -c "{version_check_code.strip()}"')
 
+
 def main():
-    print("🚀 Starting Phase 1 Setup: Medical Assistant Environment")
+    """Main setup function"""
+    logger.info("Starting Phase 1 Setup: Medical Assistant Environment")
     create_virtual_env(ENV_NAME)
 
     pip_path = get_pip_path(ENV_NAME)
@@ -92,12 +151,13 @@ def main():
     install_packages(pip_path)
     verify_versions(python_path)
 
-    print("\n🎉 Phase 1 setup complete! You're good to go.")
-    print(f"👉 To activate your environment, run:")
+    logger.info("\n Phase 1 setup complete! You're good to go.")
+    logger.info(f"To activate your environment, run:")
     if platform.system() == "Windows":
-        print(f"   .\\{ENV_NAME}\\Scripts\\activate")
+        logger.info(f"   .\\{ENV_NAME}\\Scripts\\activate")
     else:
-        print(f"   source {ENV_NAME}/bin/activate")
+        logger.info(f"   source {ENV_NAME}/bin/activate")
+
 
 if __name__ == "__main__":
     main()
